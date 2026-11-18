@@ -6,12 +6,12 @@ on:
 
 jobs:
   test:
-    # Ubuntu 22.04's ffmpeg is 4.4, the oldest reframekit works with and the
-    # one the hosted service runs, Ubuntu 24.04's is 6.1, and ubuntu-latest
-    # is the newest Ubuntu GitHub runs. Node.js 22 is the oldest it takes,
-    # and Node.js 24 removes folders in other ways. The runners run as a
-    # user who is not root, as the service does, so the tests of a folder
-    # that takes no files and of a default ACL under umask 077 run.
+    # Ubuntu 22.04's ffmpeg is 4.4, the oldest reframekit works with, Ubuntu
+    # 24.04's is 6.1, and ubuntu-latest is the newest Ubuntu GitHub runs.
+    # Node.js 22 is the oldest it takes, and Node.js 24 removes folders in
+    # other ways. The runners run as a user who is not root, as the hosted
+    # service does, so the tests of a folder that takes no files and of a
+    # default ACL under umask 077 run.
     strategy:
       fail-fast: false
       matrix:

@@ -79,6 +79,21 @@ test("README's command line block gives --help's options and check options word 
   assert.match(require("../.codex-plugin/plugin.json").interface.longDescription, /Needs Node 22 or newer and ffmpeg 4\.4 or newer in a build made with --enable-gpl, and no API key\.$/);
 });
 
+test("the workflows' comments call Ubuntu 22.04's ffmpeg 4.4 the oldest reframekit works with, and no sentence of them says the hosted service runs it", () => {
+  for (const name of ["test.yml", "publish.yml"]) {
+    const text = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", name), "utf8");
+    const comments = text
+      .split("\n")
+      .filter((line) => /^\s*#/.test(line))
+      .map((line) => line.replace(/^\s*#\s?/, ""))
+      .join(" ");
+    assert.match(comments, /Ubuntu 22\.04's ffmpeg (?:is )?4\.4,? \(?the oldest reframekit works with[,)]/, name);
+    // A point that ends a sentence is followed by a space, where one in a
+    // version (22.04, 4.4) is not.
+    for (const sentence of comments.split(/\.\s+/)) assert.ok(!(/\b4\.4\b/.test(sentence) && /hosted/i.test(sentence)), `${name}: ${sentence}`);
+  }
+});
+
 test("the help keeps to 80 columns, and a color for --pad needs no quotes without its #", () => {
   const help = cli(["--help"]).stdout;
   for (const line of help.split("\n")) assert.ok(line.length <= 80, `${line.length}: ${line}`);

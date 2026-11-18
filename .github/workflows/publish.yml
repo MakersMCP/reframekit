@@ -7,9 +7,9 @@ on:
 jobs:
   test:
     # The same tests as on every push, on Ubuntu 22.04's ffmpeg 4.4 (the
-    # oldest reframekit works with, and the one the hosted service runs), on
-    # Ubuntu 24.04's 6.1 and on ubuntu-latest's, each with Node.js 22 and
-    # 24; nothing is published unless all of them pass.
+    # oldest reframekit works with), on Ubuntu 24.04's 6.1 and on
+    # ubuntu-latest's, each with Node.js 22 and 24; nothing is published
+    # unless all of them pass.
     strategy:
       fail-fast: false
       matrix:
