@@ -452,6 +452,94 @@ test("an MP4 whose index ffprobe cannot read is told by ffprobe's words alone, n
   }
 });
 
+test("an MP4 cut inside its index, before its media or after it, is said to be cut short there by a run, by the check of it alone and in its row of a folder's check, with nothing measured and no copy to make, whatever ffprobe makes of the part of the index that is there: ffprobe 4.4, 8 and 9 read a track of no picture, a picture of 0x0 or a whole picture out of such files", { skip: process.platform === "win32" }, () => {
+  const { probe } = require("../skills/reframekit/scripts/lib/ffmpeg");
+  const folder = outDir("cut-in-index");
+  fs.mkdirSync(folder);
+  // Two seconds of picture and sound with the index after the media, as
+  // ffmpeg writes an MP4, and a copy of it with the index first.
+  const last = path.join(folder, "last.mp4");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", ...ENCODE, ...SOUND, "-shortest", last]);
+  const first = path.join(folder, "first.mp4");
+  ffmpeg(["-i", last, "-c", "copy", "-movflags", "+faststart", first]);
+  // Where a box starts: the first of its type inside the box named before
+  // it, from the file's top level.
+  const start = (bytes, ...types) => {
+    let from = 0;
+    let to = bytes.length;
+    let at = 0;
+    for (const type of types) {
+      at = from;
+      while (at + 8 <= to && bytes.toString("latin1", at + 4, at + 8) !== type) at += bytes.readUInt32BE(at);
+      assert.ok(at + 8 <= to, `no ${types.join(" in ")}`);
+      from = at + 8;
+      to = at + bytes.readUInt32BE(at);
+    }
+    return at;
+  };
+  // Each file cut 4 bytes into the header of its first track (tkhd), and
+  // 26 bytes into the box that tells what that track holds (hdlr); the one
+  // with the index last also where the times of its picture's samples
+  // (stts) start, its media all there. ffprobe 4.4.2, 8.0.1 and 9.0.2 exit
+  // with 0 on such cuts, and give a track of data and no picture, a
+  // picture of 0x0, and a picture of 320x180 at 15360 frames a second.
+  const cuts = [];
+  for (const [name, file] of [["last", last], ["first", first]]) {
+    const bytes = fs.readFileSync(file);
+    const at = { tkhd: start(bytes, "moov", "trak", "tkhd") + 4, hdlr: start(bytes, "moov", "trak", "mdia", "hdlr") + 26 };
+    if (name === "last") at.stts = start(bytes, "moov", "trak", "mdia", "minf", "stbl", "stts");
+    for (const [box, n] of Object.entries(at)) {
+      fs.writeFileSync(path.join(folder, `${name}-${box}.mp4`), bytes.subarray(0, n));
+      cuts.push(`${name}-${box}.mp4`);
+    }
+  }
+  const cutShort = (name) => new RegExp(`^reframekit: Cannot read ${name.replace(/\./g, "\\.")}: it is cut short, its index \\(the moov box\\) running \\d+ (?:KB|bytes) past its end\\n$`);
+  for (const cut of cuts) {
+    assert.equal(layoutOf(path.join(folder, cut)).cut.box, "moov", cut);
+    const plan = cli([cut, "--for", "square", "--plan", "--out", `${cut}-plan`], { cwd: folder });
+    assert.equal(plan.status, 1, `${cut}: ${plan.stdout}`);
+    assert.match(plan.stderr, cutShort(cut));
+    assert.ok(!fs.existsSync(path.join(folder, `${cut}-plan`)), `${cut}-plan is there`);
+    const lone = cli(["check", cut, "--for", "square", "--out", `${cut}-check`], { cwd: folder });
+    assert.equal(lone.status, 1, `${cut}: ${lone.stdout}`);
+    assert.match(lone.stderr, cutShort(cut));
+    // As the square file of a folder, it fails its one row, and the check
+    // measures nothing of it.
+    const kept = path.join(folder, `${cut}-folder`);
+    fs.mkdirSync(kept);
+    fs.copyFileSync(path.join(folder, cut), path.join(kept, "square.mp4"));
+    fs.writeFileSync(path.join(kept, "formats.json"), JSON.stringify({ reframekit: "0.1.0", files: [{ file: "square.mp4", place: "square" }] }));
+    const row = cli(["check", kept, "--json"]);
+    assert.equal(row.status, 1, `${cut}: ${row.stderr}`);
+    const checks = JSON.parse(row.stdout).results[0].checks;
+    assert.equal(checks.length, 1, `${cut}: ${JSON.stringify(checks)}`);
+    assert.match(checks[0].found, /^cannot be read: it is cut short, its index \(the moov box\) running \d+ (?:KB|bytes) past its end$/, cut);
+  }
+  // What ffprobe 4.4.2, 8.0.1 and 9.0.2 printed for those cuts of a file
+  // with the index last, exiting with 0, given back by a stand-in for
+  // ffprobe: each cut is said to be cut short, and the same answer for the
+  // whole file is taken as it is.
+  const standIn = path.join(folder, "ffprobe");
+  fs.writeFileSync(standIn, '#!/bin/sh\ncat "$(dirname "$0")/answer.json"\n');
+  fs.chmodSync(standIn, 0o755);
+  const was = process.env.FFPROBE_PATH;
+  process.env.FFPROBE_PATH = standIn;
+  try {
+    for (const [box, picture] of [["tkhd", null], ["hdlr", [0, 0]], ["stts", [320, 180]]]) {
+      for (const version of ["4.4", "8.0", "9.0"]) {
+        fs.copyFileSync(path.join(__dirname, "fixtures", "stdout", `cut-in-index-${box}-ffprobe-${version}.json`), path.join(folder, "answer.json"));
+        const cut = `last-${box}.mp4`;
+        assert.throws(() => probe(path.join(folder, cut), cut), { message: new RegExp(`^Cannot read ${cut.replace(/\./g, "\\.")}: it is cut short, its index \\(the moov box\\) running \\d+ (?:KB|bytes) past its end$`) }, `${box} ${version}`);
+        const whole = probe(last, "last.mp4").video;
+        assert.deepEqual(whole && [whole.width, whole.height], picture, `${box} ${version}`);
+      }
+    }
+  } finally {
+    if (was === undefined) delete process.env.FFPROBE_PATH;
+    else process.env.FFPROBE_PATH = was;
+  }
+});
+
 test("a file whose description from ffprobe runs over 64 MB, as one with a title that large, is refused by name, and fails its own row of a folder's check while the others are measured", () => {
   // A title of 11.3 million bytes of 0x01, each of which ffprobe's JSON
   // writes as six characters: 68 MB of description of an 11 MB file.

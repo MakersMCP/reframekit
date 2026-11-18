@@ -440,6 +440,13 @@ function probe(file, name = file) {
   // gives it, not a run of ffprobe that failed.
   if (r.error && r.error.code === "ENOBUFS") throw cannot("ffprobe's description of it runs over 64 MB, as for a file whose tags are that large");
   if (r.error || stops(r.signal)) throw unanswered(ffprobePath(), r, 120_000, `while it read ${name}`);
+  // An MP4 cut inside its index (the moov box), as a copy or a recording
+  // that stopped there leaves it, is said to be cut short there whatever
+  // ffprobe makes of it. Where ffprobe still reads the part of the index
+  // that is there, the tracks it gives are only as far as the cut, as one
+  // of no picture or a picture of 0x0, and nothing measured of them holds.
+  const lay = layoutOf(file);
+  if (lay && lay.cut && lay.cut.box === "moov") throw cannot(`it is ${cutText(lay.cut)}`);
   if (r.status !== 0) {
     // ffprobe's words, without the path it names the file by, so a name
     // such as "No such file here.mp4" is never read as what it says.
@@ -454,7 +461,6 @@ function probe(file, name = file) {
     // about the index count only for a file that starts as an MP4 does.
     // One cut inside the header of its index, when the index comes last,
     // is said to have none, which tells more than where the cut is.
-    const lay = layoutOf(file);
     if (lay && lay.cut && !lay.cut.header) throw cannot(`it is ${cutText(lay.cut)}`);
     if (lay && lay.mp4 && /moov atom not found/i.test(said)) throw cannot("it has no index (the moov box), as an MP4 whose recording or copy stopped before its end");
     if (lay && lay.mp4 && INDEX_UNREAD.test(said)) throw cannot("ffmpeg cannot read its index (the moov box)");
