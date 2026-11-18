@@ -407,6 +407,51 @@ test("an MP4 whose tables claim four billion samples a track is read in step wit
   }
 });
 
+test("an MP4 whose index ffprobe cannot read is told by ffprobe's words alone, not by the demuxer it names before them, on the lines of ffprobe 4.4, 8 and 9 and on ffmpeg 9's, which name the input there ([in#0 @ 0x...]), and a file that does not start as an MP4 is not taken for one", { skip: process.platform === "win32" }, () => {
+  const { probe } = require("../skills/reframekit/scripts/lib/ffmpeg");
+  const folder = outDir("damaged-index");
+  fs.mkdirSync(folder);
+  // An MP4 whose boxes are all whole, with the first entry of its sample
+  // description (stsd) said to be 0 bytes long, as damage inside an index
+  // leaves one. test/fixtures/stderr holds what ffprobe 4.4.2, 8.0.1 and
+  // 9.0.2 and ffmpeg 9.0.2 printed for such a file named damaged.mp4.
+  const damaged = path.join(folder, "damaged.mp4");
+  ffmpeg(["-f", "lavfi", "-i", "color=c=0x305070:s=320x180:r=30:d=1", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=1", ...ENCODE, ...SOUND, "-shortest", damaged]);
+  const bytes = fs.readFileSync(damaged);
+  let moov = 0;
+  while (bytes.toString("latin1", moov + 4, moov + 8) !== "moov") moov += bytes.readUInt32BE(moov);
+  bytes.writeUInt32BE(0, bytes.indexOf("stsd", moov, "latin1") + 12);
+  fs.writeFileSync(damaged, bytes);
+  assert.equal(layoutOf(damaged).cut, null);
+  const unread = "ffmpeg cannot read its index (the moov box)";
+  // This machine's ffprobe.
+  assert.throws(() => probe(damaged, "damaged.mp4"), { message: `Cannot read damaged.mp4: ${unread}` });
+  // Each version's lines, given back by a stand-in for ffprobe, for that
+  // file and for one that does not start as an MP4, where the same words
+  // could be another demuxer's. Lines that end in CR LF read the same.
+  const notes = path.join(folder, "notes.mp4");
+  fs.writeFileSync(notes, "some notes\n");
+  const standIn = path.join(folder, "ffprobe");
+  fs.writeFileSync(standIn, '#!/bin/sh\ncat "$(dirname "$0")/said.txt" >&2\nexit 1\n');
+  fs.chmodSync(standIn, 0o755);
+  const was = process.env.FFPROBE_PATH;
+  process.env.FFPROBE_PATH = standIn;
+  try {
+    for (const name of ["ffprobe-4.4", "ffprobe-8.0", "ffprobe-9.0", "ffmpeg-9.0"]) {
+      const lines = fs.readFileSync(path.join(__dirname, "fixtures", "stderr", `damaged-index-${name}.txt`), "utf8");
+      for (const end of ["\n", "\r\n"]) {
+        for (const [file, said] of [[damaged, unread], [notes, "ffmpeg does not know this format"]]) {
+          fs.writeFileSync(path.join(folder, "said.txt"), lines.split("damaged.mp4").join(file).split("\n").join(end));
+          assert.throws(() => probe(file, path.basename(file)), { message: `Cannot read ${path.basename(file)}: ${said}` }, `${name} ${JSON.stringify(end)} ${path.basename(file)}`);
+        }
+      }
+    }
+  } finally {
+    if (was === undefined) delete process.env.FFPROBE_PATH;
+    else process.env.FFPROBE_PATH = was;
+  }
+});
+
 test("a file whose description from ffprobe runs over 64 MB, as one with a title that large, is refused by name, and fails its own row of a folder's check while the others are measured", () => {
   // A title of 11.3 million bytes of 0x01, each of which ffprobe's JSON
   // writes as six characters: 68 MB of description of an 11 MB file.

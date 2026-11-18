@@ -412,6 +412,14 @@ const clock = (text) => {
   return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : NaN;
 };
 
+// What ffprobe says of an MP4 whose index it cannot read, on a line of its
+// own after what logged it, in brackets: ffprobe 4.4, 8 and 9 give the
+// demuxer there, [mov,mp4,m4a,3gp,3g2,mj2 @ 0x...], where ffmpeg 9 gives
+// the input it opens, [in#0 @ 0x...]. So the words alone are read, never
+// the name before them, and since they then do not tell which demuxer
+// said them, they count only for a file that starts as an MP4 (probe()).
+const INDEX_UNREAD = /^\[[^\]\r\n]+\] error reading header$/m;
+
 // What reframekit needs to know about a file, from ffprobe. Sizes are the
 // picture as it is shown: square pixels, turned by its rotation. A file
 // whose container does not state its length (a WebM a browser recorded,
@@ -449,7 +457,7 @@ function probe(file, name = file) {
     const lay = layoutOf(file);
     if (lay && lay.cut && !lay.cut.header) throw cannot(`it is ${cutText(lay.cut)}`);
     if (lay && lay.mp4 && /moov atom not found/i.test(said)) throw cannot("it has no index (the moov box), as an MP4 whose recording or copy stopped before its end");
-    if (lay && lay.mp4 && /\[mov,[^\]]*\] error reading header/i.test(said)) throw cannot("ffmpeg cannot read its index (the moov box)");
+    if (lay && lay.mp4 && INDEX_UNREAD.test(said)) throw cannot("ffmpeg cannot read its index (the moov box)");
     if (lay && lay.cut) throw cannot(`it is ${cutText(lay.cut)}`);
     // An ffprobe that crashed on the file, or that the system killed as it
     // read it, as when memory runs out: said so, not by a line it wrote

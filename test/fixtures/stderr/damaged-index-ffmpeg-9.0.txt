@@ -1,0 +1,5 @@
+[in#0 @ 0x560b5da1eb80] invalid size 0 in stsd
+[in#0 @ 0x560b5da1eb80] error reading header
+[in#0 @ 0x560b5da1e880] Error opening input: Invalid data found when processing input
+Error opening input file damaged.mp4.
+Error opening input files: Invalid data found when processing input

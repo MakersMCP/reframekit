@@ -1,0 +1,3 @@
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x5635fd203580] invalid size 0 in stsd
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x5635fd203580] error reading header
+damaged.mp4: Invalid data found when processing input
