@@ -540,6 +540,53 @@ test("an MP4 cut inside its index, before its media or after it, is said to be c
   }
 });
 
+test("a Matroska file cut short near its start can be refused in ffprobe's or ffmpeg's own words, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, none of which says it is cut short, as the README's Limits say, on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
+  const { probe, failure } = require("../skills/reframekit/scripts/lib/ffmpeg");
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
+  assert.match(limits, /^- A Matroska or WebM file cut short near its start, as a copy or a download that stopped there, can be refused in ffprobe's or ffmpeg's own words, such as Input\/output error, End of file or, on ffmpeg 4\.4, Error marking filters as finished, none of which says that it is cut short\. Copy or download it again\.$/m);
+  const folder = outDir("cut-matroska");
+  fs.mkdirSync(folder);
+  const whole = path.join(folder, "whole.mkv");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", ...ENCODE, ...SOUND, "-shortest", whole]);
+  const bytes = fs.readFileSync(whole);
+  // Cut 40 bytes in, where the header that names it a Matroska file ends;
+  // 100 bytes in, before it describes its tracks; and 1000 bytes in,
+  // inside the first frame of its picture, of which ffmpeg 8 and 9 decode
+  // nothing and which ffmpeg 4.4 fails to read in those words.
+  for (const [at, said] of [[40, "Cannot read cut-40\\.mkv: End of file"], [100, "Cannot read cut-100\\.mkv: Input/output error"], [1000, "cut-1000\\.mkv has no frame ffmpeg could decode|Reading the picture failed: Error marking filters as finished"]]) {
+    const name = `cut-${at}.mkv`;
+    fs.writeFileSync(path.join(folder, name), bytes.subarray(0, at));
+    const r = cli([name, "--for", "square", "--plan", "--out", `${name}-plan`], { cwd: folder });
+    assert.equal(r.status, 1, `${name}: ${r.stdout}`);
+    // The error is the last line, after what the run says it reads.
+    assert.match(r.stderr.trim().split("\n").pop(), new RegExp(`^reframekit: (?:${said})$`), name);
+    assert.doesNotMatch(r.stderr, /cut short/, name);
+  }
+  // Each version's lines, given back by a stand-in for ffprobe, and what
+  // ffmpeg 4.4 printed as it failed to read the picture of the cut 1000
+  // bytes in.
+  const standIn = path.join(folder, "ffprobe");
+  fs.writeFileSync(standIn, '#!/bin/sh\ncat "$(dirname "$0")/said.txt" >&2\nexit 1\n');
+  fs.chmodSync(standIn, 0o755);
+  const was = process.env.FFPROBE_PATH;
+  process.env.FFPROBE_PATH = standIn;
+  try {
+    for (const [at, said] of [[40, "End of file"], [100, "Input/output error"]]) {
+      const file = path.join(folder, `cut-${at}.mkv`);
+      for (const version of ["4.4", "8.0", "9.0"]) {
+        const lines = fs.readFileSync(path.join(__dirname, "fixtures", "stderr", `cut-matroska-${at}-ffprobe-${version}.txt`), "utf8");
+        fs.writeFileSync(path.join(folder, "said.txt"), lines.split("cut.mkv").join(file));
+        assert.throws(() => probe(file, `cut-${at}.mkv`), { message: `Cannot read cut-${at}.mkv: ${said}` }, `${at} ${version}`);
+      }
+    }
+  } finally {
+    if (was === undefined) delete process.env.FFPROBE_PATH;
+    else process.env.FFPROBE_PATH = was;
+  }
+  assert.equal(failure(fs.readFileSync(path.join(__dirname, "fixtures", "stderr", "cut-matroska-1000-ffmpeg-4.4.txt"), "utf8")), "Error marking filters as finished");
+});
+
 test("a file whose description from ffprobe runs over 64 MB, as one with a title that large, is refused by name, and fails its own row of a folder's check while the others are measured", () => {
   // A title of 11.3 million bytes of 0x01, each of which ffprobe's JSON
   // writes as six characters: 68 MB of description of an 11 MB file.
