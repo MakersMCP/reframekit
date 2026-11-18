@@ -540,28 +540,69 @@ test("an MP4 cut inside its index, before its media or after it, is said to be c
   }
 });
 
-test("a Matroska file cut short near its start can be refused in ffprobe's or ffmpeg's own words, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, none of which says it is cut short, as the README's Limits say, on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
+test("a Matroska or WebM file cut short near its start is refused in words that do not say it is cut short, as the README's Limits say: ffprobe's or ffmpeg's own, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, a format ffmpeg does not know when cut inside the header that names it, or, as an FLV is too, a brief picture under a longer sound, by the length it states at its start, when cut past its first frame, which SKILL.md has the assistant ask about before any tpad; on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
   const { probe, failure } = require("../skills/reframekit/scripts/lib/ffmpeg");
   const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
   const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
-  assert.match(limits, /^- A Matroska or WebM file cut short near its start, as a copy or a download that stopped there, can be refused in ffprobe's or ffmpeg's own words, such as Input\/output error, End of file or, on ffmpeg 4\.4, Error marking filters as finished, none of which says that it is cut short\. Copy or download it again\.$/m);
+  assert.match(limits, /^- A Matroska or WebM file cut short near its start, as a copy or a download that stopped there, can be refused in ffprobe's or ffmpeg's own words, such as Input\/output error, End of file or, on ffmpeg 4\.4, Error marking filters as finished, none of which says that it is cut short\. Cut inside the header that names it a Matroska or WebM file, its first few dozen bytes, it is refused as a format ffmpeg does not know\. Such a file, or an FLV, cut past its first frame but inside the first fifth of a second of its picture can be refused as one that holds a brief picture under a longer sound, by the length it states at its start, though it holds less of the sound or none\. Copy or download it again\.$/m);
+  // SKILL.md has the assistant ask whether such a file plays to its end
+  // before it holds the picture as long as the sound, which would make a
+  // still video of a copy cut short.
+  const skill = fs.readFileSync(path.join(__dirname, "../skills/reframekit/SKILL.md"), "utf8");
+  assert.match(skill, /^- "under N s of sound", as in "holds one picture under N s of sound": the file is a picture with a sound, as a cover with a talk, or a video cut short near its start, as a copy or a download of a Matroska, WebM or FLV file that stopped there, which still states N as its length though it holds less of the sound or none\. So before any tpad, ask the user whether the file plays to its end, and when it stops early, or they cannot tell, ask for a whole copy or a new download, and reframe that\. For a picture with a sound, hold its picture as long as the sound first, as `ffmpeg -i <video> -vf tpad=/m);
   const folder = outDir("cut-matroska");
   fs.mkdirSync(folder);
   const whole = path.join(folder, "whole.mkv");
   ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", ...ENCODE, ...SOUND, "-shortest", whole]);
+  const webm = path.join(folder, "whole.webm");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-c:a", "libopus", "-shortest", webm]);
+  const flv = path.join(folder, "whole.flv");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", ...ENCODE, ...SOUND, "-shortest", flv]);
   const bytes = fs.readFileSync(whole);
-  // Cut 40 bytes in, where the header that names it a Matroska file ends;
-  // 100 bytes in, before it describes its tracks; and 1000 bytes in,
-  // inside the first frame of its picture, of which ffmpeg 8 and 9 decode
-  // nothing and which ffmpeg 4.4 fails to read in those words.
-  for (const [at, said] of [[40, "Cannot read cut-40\\.mkv: End of file"], [100, "Cannot read cut-100\\.mkv: Input/output error"], [1000, "cut-1000\\.mkv has no frame ffmpeg could decode|Reading the picture failed: Error marking filters as finished"]]) {
-    const name = `cut-${at}.mkv`;
-    fs.writeFileSync(path.join(folder, name), bytes.subarray(0, at));
+  const plan = (name) => {
     const r = cli([name, "--for", "square", "--plan", "--out", `${name}-plan`], { cwd: folder });
     assert.equal(r.status, 1, `${name}: ${r.stdout}`);
-    // The error is the last line, after what the run says it reads.
-    assert.match(r.stderr.trim().split("\n").pop(), new RegExp(`^reframekit: (?:${said})$`), name);
     assert.doesNotMatch(r.stderr, /cut short/, name);
+    assert.ok(!fs.existsSync(path.join(folder, `${name}-plan`)), `${name}-plan is there`);
+    // The error is the last line, after what the run says it reads.
+    return r.stderr.trim().split("\n").pop();
+  };
+  // Cut 20 bytes in, inside the header that names it a Matroska file; 40
+  // bytes in, where that header ends; 100 bytes in, before it describes
+  // its tracks; and 1000 bytes in, inside the first frame of its picture,
+  // of which ffmpeg 8 and 9 decode nothing and which ffmpeg 4.4 fails to
+  // read in those words.
+  for (const [at, said] of [[20, "Cannot read cut-20\\.mkv: ffmpeg does not know this format"], [40, "Cannot read cut-40\\.mkv: End of file"], [100, "Cannot read cut-100\\.mkv: Input/output error"], [1000, "cut-1000\\.mkv has no frame ffmpeg could decode|Reading the picture failed: Error marking filters as finished"]]) {
+    const name = `cut-${at}.mkv`;
+    fs.writeFileSync(path.join(folder, name), bytes.subarray(0, at));
+    assert.match(plan(name), new RegExp(`^reframekit: (?:${said})$`), name);
+  }
+  fs.writeFileSync(path.join(folder, "cut-20.webm"), fs.readFileSync(webm).subarray(0, 20));
+  assert.equal(plan("cut-20.webm"), "reframekit: Cannot read cut-20.webm: ffmpeg does not know this format");
+  // Cut after the first frame of its picture, and after the fourth, where
+  // the next packet starts, and an FLV the same way. What the file states
+  // at its start still gives the length of the whole file, which the
+  // refusal gives as the sound's, while the cut holds less of the sound,
+  // or none.
+  const read = (file, entries) => JSON.parse(spawnSync("ffprobe", ["-v", "error", "-show_entries", entries, "-of", "json", file], { encoding: "utf8" }).stdout);
+  const sound = (file) => {
+    const { streams, packets } = read(file, "stream=index,codec_type:packet=stream_index");
+    const index = streams.find((s) => s.codec_type === "audio").index;
+    return packets.filter((p) => p.stream_index === index).length;
+  };
+  for (const file of [whole, webm, flv]) {
+    const { streams, packets } = read(file, "stream=index,codec_type:packet=stream_index,pos");
+    const picture = streams.find((s) => s.codec_type === "video").index;
+    const stated = Number(read(file, "format=duration").format.duration).toFixed(2).replace(".", "\\.");
+    const frames = packets.filter((p) => p.stream_index === picture);
+    for (const [kept, holds] of [[1, "one picture"], [4, "(?:one picture|0\\.\\d\\d s of picture)"]]) {
+      const name = `frames-${kept}${path.extname(file)}`;
+      const cut = path.join(folder, name);
+      fs.writeFileSync(cut, fs.readFileSync(file).subarray(0, Number(packets[packets.indexOf(frames[kept - 1]) + 1].pos)));
+      assert.match(plan(name), new RegExp(`^reframekit: ${name.replace(".", "\\.")} holds ${holds} under ${stated} s of sound, not a video to reframe: hold its picture as long as the sound first, as ffmpeg's tpad filter does$`), name);
+      assert.equal(Number(read(cut, "format=duration").format.duration).toFixed(2), Number(read(file, "format=duration").format.duration).toFixed(2), `${name} states the whole length`);
+      assert.ok(sound(cut) < sound(file) / 4, `${name} holds ${sound(cut)} of the ${sound(file)} sound packets`);
+    }
   }
   // Each version's lines, given back by a stand-in for ffprobe, and what
   // ffmpeg 4.4 printed as it failed to read the picture of the cut 1000
@@ -572,7 +613,7 @@ test("a Matroska file cut short near its start can be refused in ffprobe's or ff
   const was = process.env.FFPROBE_PATH;
   process.env.FFPROBE_PATH = standIn;
   try {
-    for (const [at, said] of [[40, "End of file"], [100, "Input/output error"]]) {
+    for (const [at, said] of [[20, "ffmpeg does not know this format"], [40, "End of file"], [100, "Input/output error"]]) {
       const file = path.join(folder, `cut-${at}.mkv`);
       for (const version of ["4.4", "8.0", "9.0"]) {
         const lines = fs.readFileSync(path.join(__dirname, "fixtures", "stderr", `cut-matroska-${at}-ffprobe-${version}.txt`), "utf8");
