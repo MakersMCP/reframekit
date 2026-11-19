@@ -364,6 +364,45 @@ test("a fragmented MP4 cut only in the index of its fragments at its end, or whe
   assert.equal(cli(["fragment-cut-whole.mp4", "--for", "180x320", "--plan", "--out", "fragment-cut-whole-plan"], { cwd: dir }).status, 0);
 });
 
+test("a fragmented MP4 cut inside the index of a fragment (a moof box) is said to be cut short there, and a run says what to do only where ffprobe still reads it, as the check's paragraph and SKILL.md say: there it says to copy the part that is there, and that copy reframes; where ffprobe cannot read it, nor ffmpeg open it, the error gives no step", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  const checked = readme.slice(readme.indexOf("## The check"), readme.indexOf("## How it works"));
+  assert.match(checked, / does so in the same words, and, where ffprobe reads it and its index is whole, says what to do: copy or download it again, or, for a recording that stopped part way, make a whole file of the part that is there, as `ffmpeg -i rec\.mp4 -c copy whole\.mkv` does, and reframe that\. Where such a file holds none of its media, /);
+  const skill = fs.readFileSync(path.join(__dirname, "../skills/reframekit/SKILL.md"), "utf8");
+  assert.match(skill, / When the error says to make a whole file of the part that is there, a recording that cannot be had again, as one a crash stopped, keeps that part in the file `ffmpeg -i <video> -c copy whole\.mkv` makes; reframe whole\.mkv\. A Matroska file takes what ffmpeg cannot copy into an MP4, as an editor's ProRes, a browser's VP8 or, on ffmpeg 4\.4, a camera's PCM sound\. A file the error says holds none of its media, or not even the first frame of its picture whole, keeps nothing a copy could reframe\. The check fails a finished file cut short in the same words\.$/m);
+  // A fragment a second, each with its index (moof) before its media.
+  const frag = path.join(dir, "fragments-of-a-second.mp4");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=3", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=3", ...ENCODE, "-g", "30", ...SOUND, "-movflags", "+frag_keyframe+empty_moov", frag]);
+  const bytes = fs.readFileSync(frag);
+  const moofs = [];
+  for (let at = 0; at + 8 <= bytes.length; at += bytes.readUInt32BE(at)) if (bytes.toString("latin1", at + 4, at + 8) === "moof") moofs.push([at, bytes.readUInt32BE(at)]);
+  assert.ok(moofs.length > 2, `${moofs.length} fragments`);
+  const [second, size] = moofs[1];
+  const probes = (name) => spawnSync("ffprobe", ["-v", "error", "-show_format", "-show_streams", "-of", "json", name], { cwd: dir, encoding: "utf8" }).status;
+  const planned = (name, at) => {
+    fs.writeFileSync(path.join(dir, name), bytes.subarray(0, at));
+    const r = cli([name, "--for", "180x320", "--plan", "--out", `${name}-plan`], { cwd: dir });
+    assert.equal(r.status, 1, `${name}: ${r.stdout}`);
+    assert.ok(!fs.existsSync(path.join(dir, `${name}-plan`)), `${name}-plan is there`);
+    return r.stderr;
+  };
+  // Cut 8 bytes into the index of the second fragment, which ffprobe 4.4,
+  // 8 and 9 still read: told to copy the part that is there, and ffmpeg's
+  // copy holds the first fragment and reframes.
+  const early = planned("moof-early.mp4", second + 8);
+  assert.equal(probes("moof-early.mp4"), 0);
+  assert.match(early, new RegExp(`^reframekit: Cannot read moof-early\\.mp4: it is cut short, the index of a fragment \\(a moof box\\) running \\d+ (?:bytes|KB) past its end${REMEDY}$`, "m"));
+  ffmpeg(["-i", path.join(dir, "moof-early.mp4"), "-c", "copy", path.join(dir, "moof-early-whole.mkv")]);
+  assert.equal(cli(["moof-early-whole.mkv", "--for", "180x320", "--plan", "--out", "moof-early-whole-plan"], { cwd: dir }).status, 0);
+  // Cut 1 byte short of that index's end, which ffprobe 4.4, 8 and 9 fail
+  // to read and ffmpeg fails to open: the error gives no step.
+  const late = planned("moof-late.mp4", second + size - 1);
+  assert.notEqual(probes("moof-late.mp4"), 0);
+  assert.match(late, /^reframekit: Cannot read moof-late\.mp4: it is cut short, the index of a fragment \(a moof box\) running 1 byte past its end$/m);
+  const opened = spawnSync("ffmpeg", ["-hide_banner", "-v", "error", "-i", "moof-late.mp4", "-c", "copy", "-f", "null", "-"], { cwd: dir, encoding: "utf8" });
+  assert.notEqual(opened.status, 0, opened.stderr);
+});
+
 test("an MP4 whose tables claim four billion samples a track is read in step with its size, so a check and a run of it end at once", () => {
   // As a 20 KB file a sweep of MP4s found: forty tracks of one chunk each,
   // whose tables claim 2^32 - 1 samples a track, of one size given once,
@@ -547,7 +586,7 @@ test("a video cut short or damaged is said to be cut short only when it is an MP
   assert.match(limits, /^- A video cut short or damaged, as a copy or a download that stopped early, is said to be cut short only when it is an MP4 or a MOV whose boxes show it \(see \[The check\]\(#the-check\)\), and even then a run can refuse it first for what ffprobe reads of it\. Any such video can be refused, or read as far as it goes, in words that do not say it is cut short, such as End of file, a format ffmpeg does not know, a picture of 0x0, no video stream or a brief picture under a longer sound, and the refusal, the length and the streams ffprobe gives it and what the run says of its sound can be false of the file or of the video it was cut from: check that the file plays to its end before acting on such a message, and copy or download it again when it does not\.$/m);
   // The check's paragraph says which refusal of a run comes first.
   const checked = readme.slice(readme.indexOf("## The check"), readme.indexOf("## How it works"));
-  assert.match(checked, / A run refuses before any work a video cut short so that media it lists is not there and, unless it refuses it first for what ffprobe reads of it \(see \[Limits\]\(#limits\)\), does so in the same words, and where its index is whole says what to do: /);
+  assert.match(checked, / A run refuses before any work a video cut short so that media it lists is not there and, unless it refuses it first for what ffprobe reads of it \(see \[Limits\]\(#limits\)\), does so in the same words, and, where ffprobe reads it and its index is whole, says what to do: /);
   // SKILL.md has the assistant ask whether such a file plays to its end
   // before it holds the picture as long as the sound, which would make a
   // still video of a copy cut short.
