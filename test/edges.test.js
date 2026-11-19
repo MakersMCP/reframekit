@@ -696,10 +696,10 @@ test("a video whose picture lasts less than a quarter of a second can be refused
   }
 });
 
-test("a sound shorter than about 0.4 s is too short for the loudness meter: its level is left as it is, and the run and FORMATS.md call it silent, as the README's Limits say, while half a second of it is measured and set", () => {
+test("a sound shorter than about 0.4 s is too short for the loudness meter, so its level is left as it is, whatever the run and FORMATS.md say of it, as the README's Limits say: they call a tone of 0.3 s under as long a picture silent, and one that starts 1 s into a 3 s picture silent as well, while they give the level the finished file measures as if loudnorm had set it; half a second of it is measured and set", () => {
   const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
   const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
-  assert.match(limits, /^- A sound shorter than about 0\.4 s is too short for the loudness meter: its level is left as it is, and the run and `FORMATS\.md` call it silent\.$/m);
+  assert.match(limits, /^- A sound shorter than about 0\.4 s is too short for the loudness meter, so its level is left as it is, whatever the run and `FORMATS\.md` say of it: they can call it silent, or give the level the finished file measures as if loudnorm had set it\.$/m);
   // A tone of 0.3 s under as long a picture. The meter reads sound in
   // blocks of 0.4 s, so it has no block of this one to measure.
   const tone = (seconds) => make(`tone-${seconds}`, ["-f", "lavfi", "-i", `testsrc2=s=320x180:r=30:d=${seconds}`, "-f", "lavfi", "-i", `sine=f=440:r=48000:d=${seconds}`, ...ENCODE, ...SOUND, "-shortest"]);
@@ -712,9 +712,33 @@ test("a sound shorter than about 0.4 s is too short for the loudness meter: its 
   assert.match(md, /^\| 180x320\.mp4 \|.* \| silent \| pass \|$/m);
   assert.match(md, /^The sound is silent, so its level was left as it is\. /m);
   // The file holds the tone, not silence.
-  const levels = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", path.join(out, "180x320.mp4"), "-af", "volumedetect", "-f", "null", "-"], { encoding: "utf8" }).stderr;
-  const peak = Number(/max_volume: (-?[\d.]+) dB/.exec(levels)[1]);
-  assert.ok(peak > -30, `the tone peaks at ${peak} dB`);
+  const peak = (file) => Number(/max_volume: (-?[\d.]+) dB/.exec(spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-af", "volumedetect", "-f", "null", "-"], { encoding: "utf8" }).stderr)[1]);
+  assert.ok(peak(path.join(out, "180x320.mp4")) > -30, `the tone peaks at ${peak(path.join(out, "180x320.mp4"))} dB`);
+  // A tone of 0.3 s in stereo that starts 1 s into a 3 s picture. The run
+  // measures the sound alone, finds no level, and leaves it as it is, as
+  // it says. The finished file's sound starts with the picture, a second
+  // of silence first, so its meter reads a level, which the run and
+  // FORMATS.md give as if loudnorm had set the sound and missed. ffmpeg
+  // 4.4, 8 and 9 give these lines alike.
+  const late = fixture("late-tone", { name: "x", ext: "mkv", make: (file) => ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=3", "-itsoffset", "1", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=0.3", "-map", "0:v", "-map", "1:a", "-ac", "2", ...ENCODE, ...SOUND, file]) });
+  const lateOut = outDir("late-tone");
+  const l = cli([late, "--for", "180x320", "--out", lateOut]);
+  assert.equal(l.status, 0, l.stderr);
+  const row = /^ {2}180x320\.mp4 .* (-\d+\.\d) LUFS$/m.exec(l.stdout);
+  assert.ok(row && Number(row[1]) < -14.5, l.stdout);
+  const lufs = row[1].replace(".", "\\.");
+  assert.match(l.stdout, /^ {2}Note: The sound is silent, so its level was left as it is\.$/m);
+  assert.match(l.stdout, new RegExp(`^ {2}Note: 180x320\\.mp4 came out at ${lufs} LUFS, more than half a unit from -14 LUFS after every try to set it\\.$`, "m"));
+  const lateMd = fs.readFileSync(path.join(lateOut, "FORMATS.md"), "utf8");
+  assert.match(lateMd, new RegExp(`^\\| 180x320\\.mp4 \\|.* \\| ${lufs} LUFS, -\\d+\\.\\d dBTP \\| pass \\|$`, "m"));
+  assert.match(lateMd, new RegExp(`^Each file's sound was set to -14 LUFS with ffmpeg's loudnorm and encoded as stereo AAC at 48 kHz, then measured again: ${lufs} LUFS, every true peak under -1 dBTP\\.$`, "m"));
+  assert.match(lateMd, new RegExp(`^180x320\\.mp4 still measures ${lufs} LUFS after the last try, more than half a unit from -14 LUFS\\.$`, "m"));
+  assert.match(lateMd, /^One gain change did it, so the mix is unchanged\.$/m);
+  assert.match(lateMd, /^- The sound is silent, so its level was left as it is\.$/m);
+  // No loudnorm set it: the tone peaks in the file as in the video.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lateOut, "formats.json"), "utf8")).files[0].normalization, null);
+  const moved = peak(path.join(lateOut, "180x320.mp4")) - peak(late);
+  assert.ok(Math.abs(moved) < 1, `the tone's peak moved by ${moved.toFixed(1)} dB`);
   // Half a second of the same tone is measured and set.
   const set = cli([tone(0.5), "--for", "180x320", "--out", outDir("tone-0.5"), "--json"]);
   assert.equal(set.status, 0, set.stderr);
