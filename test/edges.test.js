@@ -696,6 +696,33 @@ test("a video whose picture lasts less than a quarter of a second can be refused
   }
 });
 
+test("a sound shorter than about 0.4 s is too short for the loudness meter: its level is left as it is, and the run and FORMATS.md call it silent, as the README's Limits say, while half a second of it is measured and set", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
+  assert.match(limits, /^- A sound shorter than about 0\.4 s is too short for the loudness meter: its level is left as it is, and the run and `FORMATS\.md` call it silent\.$/m);
+  // A tone of 0.3 s under as long a picture. The meter reads sound in
+  // blocks of 0.4 s, so it has no block of this one to measure.
+  const tone = (seconds) => make(`tone-${seconds}`, ["-f", "lavfi", "-i", `testsrc2=s=320x180:r=30:d=${seconds}`, "-f", "lavfi", "-i", `sine=f=440:r=48000:d=${seconds}`, ...ENCODE, ...SOUND, "-shortest"]);
+  const out = outDir("tone-0.3");
+  const r = cli([tone(0.3), "--for", "180x320", "--out", out]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ {2}180x320\.mp4 .* silent$/m);
+  assert.match(r.stdout, /^ {2}Note: The sound is silent, so its level was left as it is\.$/m);
+  const md = fs.readFileSync(path.join(out, "FORMATS.md"), "utf8");
+  assert.match(md, /^\| 180x320\.mp4 \|.* \| silent \| pass \|$/m);
+  assert.match(md, /^The sound is silent, so its level was left as it is\. /m);
+  // The file holds the tone, not silence.
+  const levels = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", path.join(out, "180x320.mp4"), "-af", "volumedetect", "-f", "null", "-"], { encoding: "utf8" }).stderr;
+  const peak = Number(/max_volume: (-?[\d.]+) dB/.exec(levels)[1]);
+  assert.ok(peak > -30, `the tone peaks at ${peak} dB`);
+  // Half a second of the same tone is measured and set.
+  const set = cli([tone(0.5), "--for", "180x320", "--out", outDir("tone-0.5"), "--json"]);
+  assert.equal(set.status, 0, set.stderr);
+  const formats = JSON.parse(set.stdout);
+  assert.notEqual(formats.files[0].lufs, null);
+  assert.doesNotMatch(formats.notes.join(" "), /The sound is silent/);
+});
+
 test("a picture under a longer sound, as ffmpeg makes an MP4 of a cover and a talk without -loop 1, is refused before any work with what it is and what to do", () => {
   const cover = path.join(dir, "cover.png");
   ffmpeg(["-f", "lavfi", "-i", "color=c=0x802020:s=320x180", "-frames:v", "1", cover]);
