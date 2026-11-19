@@ -671,6 +671,31 @@ test("a file with sound and no picture is refused", () => {
   assert.match(r.stderr, /has no video stream/);
 });
 
+test("a video whose picture lasts less than a quarter of a second can be refused on ffmpeg 8 and 9 in ffmpeg's words, as the README's Limits say, and one whose picture lasts a little longer is planned", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
+  assert.match(limits, /^- A video whose picture lasts less than a quarter of a second can be refused on ffmpeg 8 and 9 in ffmpeg's words, Nothing was written into output file, because at least one of its streams received no packets\.$/m);
+  // Seven frames at 30 fps, a picture of 0.23 s, and eight, of 0.27 s. The
+  // reading looks for black bars in two frames a second, and ffmpeg 8 and
+  // 9 fail a run that wrote nothing into one of its outputs, as that one
+  // is for a picture of less than a quarter of a second. ffmpeg 4.4 plans
+  // both.
+  const said = "reframekit: Reading the picture failed: Nothing was written into output file, because at least one of its streams received no packets.";
+  const newer = /^ffmpeg version n?[89]\./.test(spawnSync("ffmpeg", ["-version"], { encoding: "utf8" }).stdout || "");
+  for (const [seconds, frames] of [[0.25, 7], [0.27, 8]]) {
+    const file = make(`picture-${frames}`, ["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=1", "-f", "lavfi", "-i", `sine=f=440:r=48000:d=${seconds}`, "-frames:v", String(frames), ...ENCODE, ...SOUND]);
+    const counted = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v", "-count_packets", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", file], { encoding: "utf8" }).stdout.trim();
+    assert.equal(Number(counted), frames, `${path.basename(file)} holds ${counted} frames`);
+    const r = cli([file, "--for", "180x320", "--plan", "--out", outDir(`picture-${frames}-plan`)]);
+    const last = r.stderr.trim().split("\n").pop();
+    if (frames === 8) assert.equal(r.status, 0, r.stderr);
+    else if (newer) {
+      assert.equal(r.status, 1, r.stdout);
+      assert.equal(last, said);
+    } else assert.ok(r.status === 0 || last === said, r.stderr);
+  }
+});
+
 test("a picture under a longer sound, as ffmpeg makes an MP4 of a cover and a talk without -loop 1, is refused before any work with what it is and what to do", () => {
   const cover = path.join(dir, "cover.png");
   ffmpeg(["-f", "lavfi", "-i", "color=c=0x802020:s=320x180", "-frames:v", "1", cover]);
