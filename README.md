@@ -1,3 +1,5 @@
+<img src=".github/assets/icon.svg" alt="" width="72" height="72">
+
 # reframekit
 
 Turn one finished video into the version each place takes: 9:16 for TikTok, Reels and Shorts, 4:5 for the feeds, 1:1, and 16:9 for YouTube, X and LinkedIn. In each shot the crop follows what moves; a shot whose action or words are wider than the crop is shown whole on a blurred copy of itself instead. Every file is cut at a shot change to the place's length, kept under its file size limit and set to -14 LUFS, and gets a cover.
