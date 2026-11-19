@@ -696,6 +696,31 @@ test("a video whose picture lasts less than a quarter of a second can be refused
   }
 });
 
+test("a video whose picture starts several seconds after its sound can be refused in ffmpeg's words as the frames for sheet.png are taken, as the README's Limits say: a Matroska or WebM file whose picture of 2 s starts 6 s after its sound is, on ffmpeg 4.4, 8 and 9, and one whose picture starts 2 s after it is planned", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
+  assert.match(limits, /^- A video whose picture starts several seconds after its sound, as 6 s in a Matroska or WebM file, can be refused in ffmpeg's words as the frames for `sheet\.png` are taken, such as Nothing was written into output file, because at least one of its streams received no packets, or, on ffmpeg 4\.4, Error marking filters as finished\.$/m);
+  const version = (spawnSync("ffmpeg", ["-version"], { encoding: "utf8" }).stdout || "").split("\n")[0];
+  const words = /^ffmpeg version n?4\.4\./.test(version) ? "Error marking filters as finished" : /^ffmpeg version n?[89]\./.test(version) ? "Nothing was written into output file, because at least one of its streams received no packets." : null;
+  const said = /^reframekit: Taking the frame at \d+\.\d\d s for sheet\.png: ffmpeg failed: (.*)$/;
+  for (const [ext, codecs] of [["mkv", [...ENCODE, ...SOUND]], ["webm", ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-c:a", "libopus"]]]) {
+    for (const late of [6, 2]) {
+      const file = fixture(`late-picture-${late}`, { name: ext, ext, make: (out) => ffmpeg(["-itsoffset", String(late), "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", `sine=f=440:r=48000:d=${late + 2}`, "-map", "0:v", "-map", "1:a", ...codecs, out]) });
+      const out = outDir(`late-picture-${late}-${ext}-plan`);
+      const r = cli([file, "--for", "180x320", "--plan", "--out", out]);
+      const last = r.stderr.trim().split("\n").pop();
+      if (late === 2) assert.equal(r.status, 0, r.stderr);
+      else if (words) {
+        assert.equal(r.status, 1, `${path.basename(file)}: ${r.stdout}`);
+        assert.ok(!fs.existsSync(out), `${out} is there`);
+        const m = said.exec(last);
+        assert.ok(m, `${path.basename(file)}: ${last}`);
+        assert.equal(m[1], words);
+      } else assert.ok(r.status === 0 || said.test(last), r.stderr);
+    }
+  }
+});
+
 test("a sound shorter than about 0.4 s is too short for the loudness meter, so its level is left as it is, whatever the run and FORMATS.md say of it, as the README's Limits say: they call a tone of 0.3 s under as long a picture silent, and one that starts 1 s into a 3 s picture silent as well, while they give the level the finished file measures as if loudnorm had set it; half a second of it is measured and set", () => {
   const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
   const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
