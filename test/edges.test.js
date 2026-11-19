@@ -808,6 +808,64 @@ test("a picture under a longer sound in a WebM or a Matroska file is refused as 
   }
 });
 
+test("a whole MPEG-TS or MPEG-PS of a cover with a talk longer than about 7 s, one picture under the whole sound, and an MPEG-TS whose picture starts 8 s after its sound are refused as a picture of 0x0, as the README's Limits and SKILL.md say, since ffprobe finds no frame of their picture in the part it reads first; the picture and the sound they say to take out of the cover make a video that is planned, and with a talk of 6 s the cover is refused as a picture under a longer sound", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
+  assert.match(limits, /^- A whole MPEG-TS or MPEG-PS can be refused as a picture of 0x0, too small to reframe, when ffprobe finds no frame of its picture in the part of the file it reads first, as for a cover with a talk longer than about 7 s, one picture under the whole sound, or for an MPEG-TS whose picture starts 8 s after its sound\. For such a cover, take its picture and its sound out, as `ffmpeg -i <video> -map 0:v:0 -frames:v 1 cover\.png` and `ffmpeg -i <video> -map 0:a:0 -c copy talk\.mka` do, and make the video of them, as `ffmpeg -loop 1 -i cover\.png -i talk\.mka -t N -c:v libx264 -pix_fmt yuv420p -c:a aac talk\.mp4` does for a sound of N seconds\.$/m);
+  const skill = fs.readFileSync(path.join(__dirname, "../skills/reframekit/SKILL.md"), "utf8");
+  const line = /^- "is 0x0, too small to reframe": ffprobe gave the picture no size\. A video cut short, as a copy or a download that stopped early, can give it: ask the user whether the file plays to its end, and when it stops early, or they cannot tell, ask for a whole copy or a new download\. So can a whole MPEG-TS or MPEG-PS whose picture ffprobe finds no frame of in the part it reads first, as one of a cover with a talk longer than about 7 s, or an MPEG-TS whose picture starts 8 s after its sound\. For such a cover, take its picture and its sound out, as `(ffmpeg -i <video> -map 0:v:0 -frames:v 1 cover\.png)` and `(ffmpeg -i <video> -map 0:a:0 -c copy talk\.mka)` do, make the video of them, as `(ffmpeg -loop 1 -i cover\.png -i talk\.mka -t N -c:v libx264 -pix_fmt yuv420p -c:a aac talk\.mp4)` does, N being the length of the sound that `(ffprobe -v error -show_entries format=duration -of csv=p=0 talk\.mka)` gives, and reframe talk\.mp4\.$/m.exec(skill);
+  assert.ok(line, "SKILL.md has no line for a picture of 0x0");
+  const [, picture, sound, video, length] = line;
+  // SKILL.md's commands as written, in the folder of the file, with the
+  // file and N put in.
+  const run = (command, cwd, values) => {
+    const words = command.split(" ").map((w) => (Object.hasOwn(values, w) ? values[w] : w));
+    const r = spawnSync(words[0], [...(words[0] === "ffmpeg" ? ["-v", "error", "-y"] : []), ...words.slice(1)], { cwd, encoding: "utf8" });
+    assert.equal(r.status, 0, `${command}: ${r.stderr}`);
+    return r.stdout;
+  };
+  const cover = path.join(dir, "whole-cover.png");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180", "-frames:v", "1", cover]);
+  // One picture under a tone of 12 s, and of 6 s, as ffmpeg makes them of
+  // a picture and a sound without -loop 1: in an MPEG-TS and, with MPEG-2
+  // and MP2 as a DVD holds them, in an MPEG-PS. Such a file holds its one
+  // frame whole, near its start.
+  for (const [ext, codecs, format] of [["ts", [...ENCODE, ...SOUND], "mpegts"], ["mpg", ["-c:v", "mpeg2video", "-q:v", "4", "-c:a", "mp2"], "vob"]]) {
+    const folder = outDir(`whole-cover-${ext}`);
+    fs.mkdirSync(folder);
+    const plan = (name) => {
+      const r = cli([name, "--for", "180x320", "--plan", "--out", `${name}-plan`], { cwd: folder });
+      assert.equal(r.status, 1, `${name}: ${r.stdout}`);
+      assert.ok(!fs.existsSync(path.join(folder, `${name}-plan`)), `${name}-plan is there`);
+      return r.stderr.trim().split("\n").pop();
+    };
+    for (const seconds of [12, 6]) ffmpeg(["-i", cover, "-f", "lavfi", "-i", `sine=f=330:r=48000:d=${seconds}`, ...codecs, "-f", format, path.join(folder, `talk-${seconds}.${ext}`)]);
+    const long = `talk-12.${ext}`;
+    assert.equal(plan(long), `reframekit: ${long} is 0x0, too small to reframe`);
+    const { streams } = JSON.parse(spawnSync("ffprobe", ["-v", "error", "-select_streams", "v", "-show_entries", "stream=width,height", "-of", "json", long], { cwd: folder, encoding: "utf8" }).stdout);
+    assert.deepEqual(streams.map((s) => [s.width, s.height]), [[0, 0]], `${long}: ffprobe gives ${JSON.stringify(streams)}`);
+    const short = `talk-6.${ext}`;
+    assert.match(plan(short), new RegExp(`^reframekit: ${short.replace(".", "\\.")} holds (?:one picture|0\\.\\d\\d s of picture) under [\\d.]+ s of sound, not a video to reframe: hold its picture as long as the sound first, as ffmpeg's tpad filter does$`));
+    // Taken out as SKILL.md says, the picture and the sound make a video of
+    // the sound's length, which is planned.
+    run(picture, folder, { "<video>": long });
+    run(sound, folder, { "<video>": long });
+    const seconds = Number(run(length, folder, {}).trim());
+    assert.ok(Math.abs(seconds - 12) < 0.1, `talk.mka of ${long} lasts ${seconds} s`);
+    run(video, folder, { N: String(seconds) });
+    const made = cli(["talk.mp4", "--for", "180x320", "--plan", "--out", "talk-plan", "--json"], { cwd: folder });
+    assert.equal(made.status, 0, `${long}: ${made.stderr}`);
+    assert.ok(Math.abs(JSON.parse(made.stdout).duration - seconds) < 0.1, `${long}: ${JSON.parse(made.stdout).duration} s`);
+  }
+  // An MPEG-TS whose picture of 2 s starts 8 s after its sound: ffprobe
+  // finds no frame of it in the part it reads first either.
+  ffmpeg(["-itsoffset", "8", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=330:r=48000:d=10", "-map", "0:v", "-map", "1:a", ...ENCODE, ...SOUND, "-f", "mpegts", path.join(dir, "ts-late-picture.ts")]);
+  const late = cli(["ts-late-picture.ts", "--for", "180x320", "--plan", "--out", "ts-late-picture-plan"], { cwd: dir });
+  assert.equal(late.status, 1, late.stdout);
+  assert.equal(late.stderr.trim().split("\n").pop(), "reframekit: ts-late-picture.ts is 0x0, too small to reframe");
+  assert.ok(!fs.existsSync(path.join(dir, "ts-late-picture-plan")));
+});
+
 test("a picture that ends before its sound holds its last frame in the files to the end of the sound, and the notes and the sheet say from when", () => {
   // Two seconds of picture, a box crossing it, under five of sound.
   const file = path.join(dir, "ends-early.mp4");
