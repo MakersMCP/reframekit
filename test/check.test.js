@@ -540,16 +540,19 @@ test("an MP4 cut inside its index, before its media or after it, is said to be c
   }
 });
 
-test("a video cut short near its start, whatever its format, is refused in words that do not say it is cut short, as the README's Limits say: ffprobe's or ffmpeg's own, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, a format ffmpeg does not know when cut in its first bytes, a picture of 0x0 for an FLV cut inside its first frame or, on ffmpeg 4.4, no video stream for an FLV or an MPEG-TS cut in its first KB, or, for a Matroska, WebM or FLV file cut past its first frame, a brief picture under a longer sound, by the length it states at its start, which SKILL.md has the assistant ask about before any tpad; on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
+test("a video cut short or damaged is said to be cut short only when it is an MP4 or a MOV whose boxes show it, and even then a run can refuse it first, as the README's Limits and its check paragraph say, while any such video can be refused in words that do not say so: ffprobe's or ffmpeg's own, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, a format ffmpeg does not know, a picture of 0x0, no video stream or a brief picture under the longer sound the whole video holds, which SKILL.md has the assistant ask about before any tpad; on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
   const { probe, failure } = require("../skills/reframekit/scripts/lib/ffmpeg");
   const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
   const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
-  assert.match(limits, /^- A video cut short near its start, as a copy or a download that stopped there, can be refused in words that do not say that it is cut short, whatever its format: in ffprobe's or ffmpeg's own words, such as Input\/output error, End of file or, on ffmpeg 4\.4, Error marking filters as finished, or in reframekit's, which can be false of the video it was cut from\. Cut in its first bytes, a few dozen for Matroska or WebM and a few KB for an AVI, it can be refused as a format ffmpeg does not know\. An FLV cut before its first frame is whole can be refused as a picture of 0x0, too small to reframe, and on ffmpeg 4\.4 an FLV or an MPEG-TS cut in its first KB as one with no video stream\. A Matroska, WebM or FLV file cut past its first frame but inside the first fifth of a second of its picture can be refused as one that holds a brief picture under a longer sound, by the length it states at its start, though it holds less of the sound or none\. Copy or download it again\.$/m);
+  assert.match(limits, /^- A video cut short or damaged, as a copy or a download that stopped early, is said to be cut short only when it is an MP4 or a MOV whose boxes show it \(see \[The check\]\(#the-check\)\), and even then a run can refuse it first for what ffprobe reads of it\. Any such video can be refused, or read as far as it goes, in words that do not say it is cut short, such as End of file, a format ffmpeg does not know, a picture of 0x0, no video stream or a brief picture under a longer sound, and the refusal, the length and the streams ffprobe gives it and what the run says of its sound can be false of the file or of the video it was cut from: check that the file plays to its end before acting on such a message, and copy or download it again when it does not\.$/m);
+  // The check's paragraph says which refusal of a run comes first.
+  const checked = readme.slice(readme.indexOf("## The check"), readme.indexOf("## How it works"));
+  assert.match(checked, / A run refuses before any work a video cut short so that media it lists is not there and, unless it refuses it first for what ffprobe reads of it \(see \[Limits\]\(#limits\)\), does so in the same words, and where its index is whole says what to do: /);
   // SKILL.md has the assistant ask whether such a file plays to its end
   // before it holds the picture as long as the sound, which would make a
   // still video of a copy cut short.
   const skill = fs.readFileSync(path.join(__dirname, "../skills/reframekit/SKILL.md"), "utf8");
-  assert.match(skill, /^- "under N s of sound", as in "holds one picture under N s of sound": the file is a picture with a sound, as a cover with a talk, or a video cut short near its start, as a copy or a download of a Matroska, WebM or FLV file that stopped there, which still states N as its length though it holds less of the sound or none\. So before any tpad, ask the user whether the file plays to its end, and when it stops early, or they cannot tell, ask for a whole copy or a new download, and reframe that\. For a picture with a sound, hold its picture as long as the sound first, as `ffmpeg -i <video> -vf tpad=/m);
+  assert.match(skill, /^- "under N s of sound", as in "holds one picture under N s of sound": the file is a picture with a sound, as a cover with a talk, or a video cut short, as a copy or a download that stopped early, which can hold less of the sound than N s, or none\. So before any tpad, ask the user whether the file plays to its end, and when it stops early, or they cannot tell, ask for a whole copy or a new download, and reframe that\. For a picture with a sound, hold its picture as long as the sound first, as `ffmpeg -i <video> -vf tpad=stop_mode=clone:stop_duration=N -c:v libx264 -pix_fmt yuv420p -c:a copy held\.mkv` does, and reframe held\.mkv\. When the picture and the sound are files of their own, `ffmpeg -loop 1 -i cover\.png -i talk\.m4a -t N -c:v libx264 -pix_fmt yuv420p -c:a aac talk\.mp4` makes the video\.$/m);
   const folder = outDir("cut-matroska");
   fs.mkdirSync(folder);
   const whole = path.join(folder, "whole.mkv");
@@ -604,6 +607,29 @@ test("a video cut short near its start, whatever its format, is refused in words
       assert.ok(sound(cut) < sound(file) / 4, `${name} holds ${sound(cut)} of the ${sound(file)} sound packets`);
     }
   }
+  // A cover with a talk, one picture under 4 s of sound as ffmpeg makes it
+  // without -loop 1, in Matroska and in an MP4 with its index first, each
+  // cut halfway into its sound. The cut is refused as the whole file is,
+  // by the length of the whole file's sound, though it holds about half of
+  // it. The MP4's boxes show the cut, and its check says it is cut short,
+  // while a run refuses it first for what ffprobe reads of it.
+  const cover = path.join(folder, "cover.png");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180", "-frames:v", "1", cover]);
+  for (const ext of ["mkv", "mp4"]) {
+    const talk = path.join(folder, `talk.${ext}`);
+    ffmpeg(["-i", cover, "-f", "lavfi", "-i", "sine=f=330:r=48000:d=4", ...ENCODE, ...SOUND, ...(ext === "mp4" ? ["-movflags", "+faststart"] : []), talk]);
+    const half = path.join(folder, `half.${ext}`);
+    const all = fs.readFileSync(talk);
+    fs.writeFileSync(half, all.subarray(0, Math.floor(all.length / 2)));
+    const stated = Number(read(talk, "format=duration").format.duration).toFixed(2).replace(".", "\\.");
+    for (const name of [`talk.${ext}`, `half.${ext}`]) assert.match(plan(name), new RegExp(`^reframekit: ${name.replace(".", "\\.")} holds (?:one picture|0\\.\\d\\d s of picture) under ${stated} s of sound, not a video to reframe: hold its picture as long as the sound first, as ffmpeg's tpad filter does$`), name);
+    assert.ok(sound(half) < (sound(talk) * 3) / 4, `half.${ext} holds ${sound(half)} of the ${sound(talk)} sound packets`);
+  }
+  assert.equal(layoutOf(path.join(folder, "half.mp4")).cut.box, "mdat");
+  const lone = cli(["check", "half.mp4", "--for", "square", "--out", "half-check"], { cwd: folder });
+  assert.equal(lone.status, 1, lone.stderr);
+  const rows = JSON.parse(fs.readFileSync(path.join(folder, "half-check", "check.json"), "utf8")).results[0].checks;
+  assert.match(rows.find((c) => c.name === "file").found, /^cut short, its media \(the mdat box\) running \d+ KB past its end$/);
   // An AVI cut 2000 bytes in, inside the header of several KB that
   // ffmpeg's muxer writes before its first frame, is refused as a format
   // ffmpeg does not know, as a Matroska file cut in its first bytes is.
