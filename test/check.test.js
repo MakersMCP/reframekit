@@ -540,11 +540,11 @@ test("an MP4 cut inside its index, before its media or after it, is said to be c
   }
 });
 
-test("a Matroska or WebM file cut short near its start is refused in words that do not say it is cut short, as the README's Limits say: ffprobe's or ffmpeg's own, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, a format ffmpeg does not know when cut inside the header that names it, or, as an FLV is too, a brief picture under a longer sound, by the length it states at its start, when cut past its first frame, which SKILL.md has the assistant ask about before any tpad; on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
+test("a video cut short near its start, whatever its format, is refused in words that do not say it is cut short, as the README's Limits say: ffprobe's or ffmpeg's own, Input/output error, End of file or, on ffmpeg 4.4, Error marking filters as finished, a format ffmpeg does not know when cut in its first bytes, a picture of 0x0 for an FLV cut inside its first frame or, on ffmpeg 4.4, no video stream for an FLV or an MPEG-TS cut in its first KB, or, for a Matroska, WebM or FLV file cut past its first frame, a brief picture under a longer sound, by the length it states at its start, which SKILL.md has the assistant ask about before any tpad; on the lines of ffprobe 4.4, 8 and 9 and of ffmpeg 4.4", { skip: process.platform === "win32" }, () => {
   const { probe, failure } = require("../skills/reframekit/scripts/lib/ffmpeg");
   const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
   const limits = readme.slice(readme.indexOf("## Limits"), readme.indexOf("## See also"));
-  assert.match(limits, /^- A Matroska or WebM file cut short near its start, as a copy or a download that stopped there, can be refused in ffprobe's or ffmpeg's own words, such as Input\/output error, End of file or, on ffmpeg 4\.4, Error marking filters as finished, none of which says that it is cut short\. Cut inside the header that names it a Matroska or WebM file, its first few dozen bytes, it is refused as a format ffmpeg does not know\. Such a file, or an FLV, cut past its first frame but inside the first fifth of a second of its picture can be refused as one that holds a brief picture under a longer sound, by the length it states at its start, though it holds less of the sound or none\. Copy or download it again\.$/m);
+  assert.match(limits, /^- A video cut short near its start, as a copy or a download that stopped there, can be refused in words that do not say that it is cut short, whatever its format: in ffprobe's or ffmpeg's own words, such as Input\/output error, End of file or, on ffmpeg 4\.4, Error marking filters as finished, or in reframekit's, which can be false of the video it was cut from\. Cut in its first bytes, a few dozen for Matroska or WebM and a few KB for an AVI, it can be refused as a format ffmpeg does not know\. An FLV cut before its first frame is whole can be refused as a picture of 0x0, too small to reframe, and on ffmpeg 4\.4 an FLV or an MPEG-TS cut in its first KB as one with no video stream\. A Matroska, WebM or FLV file cut past its first frame but inside the first fifth of a second of its picture can be refused as one that holds a brief picture under a longer sound, by the length it states at its start, though it holds less of the sound or none\. Copy or download it again\.$/m);
   // SKILL.md has the assistant ask whether such a file plays to its end
   // before it holds the picture as long as the sound, which would make a
   // still video of a copy cut short.
@@ -603,6 +603,31 @@ test("a Matroska or WebM file cut short near its start is refused in words that 
       assert.equal(Number(read(cut, "format=duration").format.duration).toFixed(2), Number(read(file, "format=duration").format.duration).toFixed(2), `${name} states the whole length`);
       assert.ok(sound(cut) < sound(file) / 4, `${name} holds ${sound(cut)} of the ${sound(file)} sound packets`);
     }
+  }
+  // An AVI cut 2000 bytes in, inside the header of several KB that
+  // ffmpeg's muxer writes before its first frame, is refused as a format
+  // ffmpeg does not know, as a Matroska file cut in its first bytes is.
+  const avi = path.join(folder, "whole.avi");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", "-c:v", "mpeg4", "-c:a", "pcm_s16le", "-shortest", avi]);
+  fs.writeFileSync(path.join(folder, "cut-2000.avi"), fs.readFileSync(avi).subarray(0, 2000));
+  assert.equal(plan("cut-2000.avi"), "reframekit: Cannot read cut-2000.avi: ffmpeg does not know this format");
+  // An FLV cut halfway into its first frame, of which ffprobe gives a
+  // picture of 0x0.
+  const listed = read(flv, "stream=index,codec_type:packet=stream_index,pos,size");
+  const first = listed.packets.find((p) => p.stream_index === listed.streams.find((s) => s.codec_type === "video").index);
+  fs.writeFileSync(path.join(folder, "inside.flv"), fs.readFileSync(flv).subarray(0, Number(first.pos) + Math.floor(Number(first.size) / 2)));
+  assert.equal(plan("inside.flv"), "reframekit: inside.flv is 0x0, too small to reframe");
+  // An FLV cut 200 bytes in, inside the tag that comes before any of its
+  // picture's, and an MPEG-TS cut 400 bytes in: ffprobe 4.4 gives no
+  // picture of either, where ffprobe 8 and 9 fail on both.
+  const ts = path.join(folder, "whole.ts");
+  ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2", ...ENCODE, ...SOUND, "-shortest", ts]);
+  fs.writeFileSync(path.join(folder, "cut-200.flv"), fs.readFileSync(flv).subarray(0, 200));
+  fs.writeFileSync(path.join(folder, "cut-400.ts"), fs.readFileSync(ts).subarray(0, 400));
+  const ffprobe44 = /^ffprobe version n?4\.4\./.test(spawnSync("ffprobe", ["-version"], { encoding: "utf8" }).stdout || "");
+  for (const name of ["cut-200.flv", "cut-400.ts"]) {
+    const said = plan(name);
+    if (ffprobe44) assert.equal(said, `reframekit: ${name} has no video stream`);
   }
   // Each version's lines, given back by a stand-in for ffprobe, and what
   // ffmpeg 4.4 printed as it failed to read the picture of the cut 1000
